@@ -109,7 +109,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-VIGNETTE_TARGET = 80
+VIGNETTE_TARGET_PER_GENDER = 40
 
 LIKERT5_OPTIONS = [
     "Совершенно не согласен(а)",
@@ -504,6 +504,7 @@ def read_completed_rows(ws):
 
 def compute_counts(records):
     vignette_counts = Counter()
+    vignette_gender_counts = Counter()
     gender_counts = Counter()
     age_counts = Counter()
 
@@ -514,23 +515,25 @@ def compute_counts(records):
 
         if vignette_id:
             vignette_counts[vignette_id] += 1
+        if vignette_id and gender:
+            vignette_gender_counts[(vignette_id, gender)] += 1
         if gender:
             gender_counts[gender] += 1
         if age:
             age_counts[age] += 1
 
-    return vignette_counts, gender_counts, age_counts
+    return vignette_counts, vignette_gender_counts, gender_counts, age_counts
 
 
-def choose_vignette_least_filled(records):
-    vignette_counts, _, _ = compute_counts(records)
+def choose_vignette_least_filled(records, gender):
+    _, vignette_gender_counts, _, _ = compute_counts(records)
 
     candidates = []
     min_ratio = None
 
     for vignette in VIGNETTES:
-        count = vignette_counts.get(vignette["id"], 0)
-        ratio = count / VIGNETTE_TARGET
+        count = vignette_gender_counts.get((vignette["id"], gender), 0)
+        ratio = count / VIGNETTE_TARGET_PER_GENDER
 
         if min_ratio is None or ratio < min_ratio:
             min_ratio = ratio
@@ -549,25 +552,46 @@ def safe_int(value):
 
 
 def update_dashboard(dashboard_ws, records):
-    vignette_counts, gender_counts, age_counts = compute_counts(records)
+    vignette_counts, vignette_gender_counts, gender_counts, age_counts = compute_counts(records)
 
     rows = []
 
-    rows.append(["Квоты по виньеткам"])
-    rows.append(["vignette_id", "type", "multisensory", "count", "target", "remaining", "fill_rate"])
+    rows.append(["Квоты по виньеткам и полу"])
+    rows.append([
+        "vignette_id",
+        "type",
+        "multisensory",
+        "gender",
+        "count",
+        "target",
+        "remaining",
+        "fill_rate",
+    ])
 
     for vignette in VIGNETTES:
-        count = vignette_counts.get(vignette["id"], 0)
-        remaining = max(VIGNETTE_TARGET - count, 0)
-        fill_rate = round(count / VIGNETTE_TARGET, 3)
+        for gender in ["Женский", "Мужской"]:
+            count = vignette_gender_counts.get((vignette["id"], gender), 0)
+            remaining = max(VIGNETTE_TARGET_PER_GENDER - count, 0)
+            fill_rate = round(count / VIGNETTE_TARGET_PER_GENDER, 3)
+            rows.append([
+                vignette["id"],
+                vignette["type"],
+                vignette["multisensory"],
+                gender,
+                count,
+                VIGNETTE_TARGET_PER_GENDER,
+                remaining,
+                fill_rate,
+            ])
+
+    rows.append([])
+    rows.append(["Общий счетчик по виньеткам"])
+    rows.append(["vignette_id", "count_total"])
+
+    for vignette in VIGNETTES:
         rows.append([
             vignette["id"],
-            vignette["type"],
-            vignette["multisensory"],
-            count,
-            VIGNETTE_TARGET,
-            remaining,
-            fill_rate,
+            vignette_counts.get(vignette["id"], 0),
         ])
 
     rows.append([])
@@ -601,9 +625,6 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-if "assigned_vignette" not in st.session_state:
-    st.session_state.assigned_vignette = choose_vignette_least_filled(existing_records)
-
 if "screening_done" not in st.session_state:
     st.session_state.screening_done = False
 
@@ -633,7 +654,15 @@ if st.session_state.scroll_top_on_render:
     scroll_to_top()
     st.session_state.scroll_top_on_render = False
 
-vignette = st.session_state.assigned_vignette
+if st.session_state.screening_done and st.session_state.screening_passed:
+    if "assigned_vignette" not in st.session_state:
+        st.session_state.assigned_vignette = choose_vignette_least_filled(
+            existing_records,
+            st.session_state.screening_gender,
+        )
+    vignette = st.session_state.assigned_vignette
+else:
+    vignette = None
 
 if st.session_state.survey_submitted:
     st.markdown(
