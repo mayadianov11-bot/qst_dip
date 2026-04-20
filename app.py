@@ -292,10 +292,49 @@ def ensure_headers(ws, headers):
     if not existing:
         ws.append_row(headers)
 
+def log_failed_screening(
+    screening_ws,
+    gender,
+    age,
+    moscow_resident,
+    visited_multisensory_last_12m,
+    consent,
+):
+    fail_age = not (18 <= int(age) <= 34)
+    fail_moscow = moscow_resident == "Нет"
+    fail_multisensory = visited_multisensory_last_12m == "Нет"
+    fail_consent = consent == "Нет"
+
+    fail_reasons = []
+    if fail_age:
+        fail_reasons.append("Возраст не 18–34")
+    if fail_moscow:
+        fail_reasons.append("Не проживает в Москве")
+    if fail_multisensory:
+        fail_reasons.append("Не был(а) в подходящем музее/выставке за 12 месяцев")
+    if fail_consent:
+        fail_reasons.append("Нет согласия")
+
+    screening_ws.append_row([
+        datetime.now().isoformat(),
+        str(uuid.uuid4()),
+        gender,
+        int(age),
+        moscow_resident,
+        visited_multisensory_last_12m,
+        consent,
+        "Да" if fail_age else "Нет",
+        "Да" if fail_moscow else "Нет",
+        "Да" if fail_multisensory else "Нет",
+        "Да" if fail_consent else "Нет",
+        "; ".join(fail_reasons),
+    ])
+
 
 def init_sheets(spreadsheet):
     responses_ws = get_or_create_worksheet(spreadsheet, "responses", rows=5000, cols=150)
     dashboard_ws = get_or_create_worksheet(spreadsheet, "dashboard", rows=200, cols=20)
+    screening_ws = get_or_create_worksheet(spreadsheet, "screening_failures", rows=5000, cols=30)
 
     response_headers = [
         "timestamp",
@@ -365,9 +404,25 @@ def init_sheets(spreadsheet):
         "education",
         "personal_financial_status",
     ]
+    
+    screening_headers = [
+        "timestamp",
+        "screening_id",
+        "gender",
+        "age",
+        "moscow_resident",
+        "visited_multisensory_last_12m",
+        "consent",
+        "fail_age",
+        "fail_moscow",
+        "fail_multisensory",
+        "fail_consent",
+        "fail_reasons",
+    ]
 
     ensure_headers(responses_ws, response_headers)
-    return responses_ws, dashboard_ws
+    ensure_headers(screening_ws, screening_headers)
+    return responses_ws, dashboard_ws, screening_ws
 
 
 def reset_survey():
@@ -617,7 +672,7 @@ def update_dashboard(dashboard_ws, records):
 
 try:
     spreadsheet = connect_spreadsheet()
-    responses_ws, dashboard_ws = init_sheets(spreadsheet)
+    responses_ws, dashboard_ws, screening_ws = init_sheets(spreadsheet)
     existing_records = read_completed_rows(responses_ws)
     update_dashboard(dashboard_ws, existing_records)
 except Exception as e:
@@ -772,6 +827,16 @@ if not st.session_state.screening_done:
                 passed = False
             if consent == "Нет":
                 passed = False
+
+            if not passed:
+                log_failed_screening(
+                    screening_ws=screening_ws,
+                    gender=gender,
+                    age=age,
+                    moscow_resident=moscow_resident,
+                    visited_multisensory_last_12m=visited_multisensory_last_12m,
+                    consent=consent,
+                )
 
             st.session_state.screening_passed = passed
             if passed:
@@ -1004,12 +1069,12 @@ with st.form("main_survey_form"):
         personal_financial_status = radio_one(
             "Какое из следующих высказываний точнее всего описывает ваше личное материальное положение?",
             [
-                "Мы едва сводим концы с концами. Денег не хватает даже на продукты.",
+                "Я едва свожу концы с концами. Денег не хватает даже на продукты.",
                 "На продукты денег хватает, но покупка одежды уже вызывает трудности.",
                 "Денег хватает на продукты и одежду, но покупка крупной бытовой техники или мебели уже затруднительна.",
-                "Мы можем без труда покупать бытовую технику и мебель, но покупка автомобиля уже затруднительна.",
-                "Мы можем без труда купить автомобиль, но покупка квартиры, дачи или другого дорогого имущества уже затруднительна.",
-                "Мы можем позволить себе практически все, что считаем нужным.",
+                "Я могу без труда покупать бытовую технику и мебель, но покупка автомобиля уже затруднительна.",
+                "Я могу без труда купить автомобиль, но покупка квартиры, дачи или другого дорогого имущества уже затруднительна.",
+                "Я могу позволить себе практически все, что считаю нужным.",
             ],
             key="personal_financial_status",
         )
